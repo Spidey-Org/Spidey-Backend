@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	spideyToken = os.Getenv("spidey_token")
+	spideyToken = "Bot " + os.Getenv("Spidey")
 	serverPort  = "7777"
 	cachedData  *InviteData
 	generated   time.Time
