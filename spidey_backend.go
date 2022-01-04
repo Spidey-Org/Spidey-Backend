@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	spideyToken = os.Getenv("spidey_token")
+	spideyToken = "Bot " + os.Getenv("Spidey")
 	serverPort  = "7777"
 
 	httpClient = &http.Client{
@@ -27,6 +27,7 @@ var (
 func main() {
 	serveMux := http.NewServeMux()
 	serveMux.Handle("/invite", &InviteHandler{})
+	serveMux.Handle("/invite_redirect", &RedirectHandler{})
 
 	server := &http.Server{
 		Addr:    ":" + serverPort,
@@ -44,23 +45,16 @@ type InviteHandler struct {
 	generated      time.Time
 }
 
-func (i *InviteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (i *InviteHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	if i.cachedResponse == nil || time.Since(i.generated) > cacheTime {
-		application, err := getApplicationMe(w)
-		if err != nil {
-			log.Println("error while getting application:", err)
-			http.Error(w, "error while getting application", http.StatusInternalServerError)
-			return
-		}
-		response, err := json.Marshal(Response{
-			URL: fmt.Sprintf(inviteURLPattern, application.ID, application.InstallParams.Permissions),
-		})
+		response, _ := consResponse(w)
+		marshalled, err := json.Marshal(response)
 		if err != nil {
 			log.Println("error while marshalling json: ", err)
 			http.Error(w, "error while marshalling json", http.StatusInternalServerError)
 			return
 		}
-		i.cachedResponse = response
+		i.cachedResponse = marshalled
 		i.generated = time.Now()
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -68,6 +62,15 @@ func (i *InviteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, err := w.Write(i.cachedResponse)
 	if err != nil {
 		log.Println("error while writing response: ", err)
+	}
+}
+
+type RedirectHandler struct{}
+
+func (rh *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	response, err := consResponse(w)
+	if err == nil {
+		http.Redirect(w, r, response.URL, http.StatusPermanentRedirect)
 	}
 }
 
@@ -82,7 +85,7 @@ type Application struct {
 	} `json:"install_params"`
 }
 
-func getApplicationMe(w http.ResponseWriter) (application Application, err error) {
+func getApplicationMe() (application Application, err error) {
 	var rq *http.Request
 	rq, err = http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -102,4 +105,22 @@ func getApplicationMe(w http.ResponseWriter) (application Application, err error
 	defer rs.Body.Close()
 	err = json.NewDecoder(rs.Body).Decode(&application)
 	return
+}
+
+func consResponse(w http.ResponseWriter) (*Response, error) {
+	application, err := getApplicationMe()
+	if err != nil {
+		log.Println("error while getting application:", err)
+		http.Error(w, "error while getting application", http.StatusInternalServerError)
+		return nil, err
+	}
+	response := Response{
+		URL: fmt.Sprintf(inviteURLPattern, application.ID, application.InstallParams.Permissions),
+	}
+	if err != nil {
+		log.Println("error while constructing the response: ", err)
+		http.Error(w, "error while constructing the response", http.StatusInternalServerError)
+		return nil, err
+	}
+	return &response, err
 }
