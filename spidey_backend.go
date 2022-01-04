@@ -62,7 +62,7 @@ type Response struct {
 	URL string `json:"url"`
 }
 
-func (i InviteHandler) ServeHTTP(wr http.ResponseWriter, rq *http.Request) {
+func (i InviteHandler) ServeHTTP(wr http.ResponseWriter, _ *http.Request) {
 	inviteData, err := getInviteUrl(wr)
 	if err == nil {
 		wr.Header().Set("Content-Type", "application/json")
