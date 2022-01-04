@@ -16,8 +16,10 @@ const (
 )
 
 var (
-	spideyToken = "Bot " + os.Getenv("Spidey")
+	spideyToken = os.Getenv("spidey_token")
 	serverPort  = "7777"
+	cachedData  *InviteData
+	generated   time.Time
 
 	httpClient = &http.Client{
 		Timeout: time.Second * 10,
@@ -40,43 +42,9 @@ func main() {
 	}
 }
 
-type InviteHandler struct {
-	cachedResponse []byte
-	generated      time.Time
-}
-
-func (i *InviteHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	if i.cachedResponse == nil || time.Since(i.generated) > cacheTime {
-		response, _ := consResponse(w)
-		marshalled, err := json.Marshal(response)
-		if err != nil {
-			log.Println("error while marshalling json: ", err)
-			http.Error(w, "error while marshalling json", http.StatusInternalServerError)
-			return
-		}
-		i.cachedResponse = marshalled
-		i.generated = time.Now()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, err := w.Write(i.cachedResponse)
-	if err != nil {
-		log.Println("error while writing response: ", err)
-	}
-}
+type InviteHandler struct{}
 
 type RedirectHandler struct{}
-
-func (rh *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	response, err := consResponse(w)
-	if err == nil {
-		http.Redirect(w, r, response.URL, http.StatusPermanentRedirect)
-	}
-}
-
-type Response struct {
-	URL string `json:"url"`
-}
 
 type Application struct {
 	ID            string `json:"id"`
@@ -85,42 +53,77 @@ type Application struct {
 	} `json:"install_params"`
 }
 
-func getApplicationMe() (application Application, err error) {
-	var rq *http.Request
-	rq, err = http.NewRequest("GET", apiURL, nil)
+type InviteData struct {
+	response Response
+	data     []byte
+}
+
+type Response struct {
+	URL string `json:"url"`
+}
+
+func (i InviteHandler) ServeHTTP(wr http.ResponseWriter, rq *http.Request) {
+	inviteData, err := getInviteUrl(wr)
+	if err == nil {
+		wr.Header().Set("Content-Type", "application/json")
+		_, err := wr.Write(inviteData.data)
+		if err != nil {
+			log.Println("there was an error while writing the response", err)
+			http.Error(wr, "there was an error while writing the response", http.StatusInternalServerError)
+		}
+	}
+}
+
+func (r RedirectHandler) ServeHTTP(wr http.ResponseWriter, rq *http.Request) {
+	inviteData, err := getInviteUrl(wr)
+	if err == nil {
+		http.Redirect(wr, rq, inviteData.response.URL, http.StatusPermanentRedirect)
+	}
+}
+
+func getInviteUrl(wr http.ResponseWriter) (*InviteData, error) {
+	if cachedData == nil || time.Since(generated) > cacheTime {
+		application, err := getApplication()
+		if err != nil {
+			log.Println("there was an error while getting the application", err)
+			http.Error(wr, "there was an error while getting the application", http.StatusInternalServerError)
+			return nil, err
+		}
+		response := Response{
+			URL: fmt.Sprintf(inviteURLPattern, application.ID, application.InstallParams.Permissions),
+		}
+		marshalled, err := json.Marshal(response)
+		if err != nil {
+			log.Println("there was an error while marshalling the data", err)
+			http.Error(wr, "there was an error while marshalling the data", http.StatusInternalServerError)
+			return nil, err
+		}
+		cachedData = &InviteData{
+			data:     marshalled,
+			response: response,
+		}
+		generated = time.Now()
+	}
+	return cachedData, nil
+}
+
+func getApplication() (application Application, err error) {
+	request, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return
 	}
-	rq.Header.Set("Authorization", spideyToken)
-	var rs *http.Response
-	rs, err = httpClient.Do(rq)
+	request.Header.Set("Authorization", spideyToken)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return
 	}
-	statusCode := rs.StatusCode
+	statusCode := response.StatusCode
 	if statusCode != 200 {
 		err = fmt.Errorf("received code %d while running the invite request", statusCode)
 		return
 	}
-	defer rs.Body.Close()
-	err = json.NewDecoder(rs.Body).Decode(&application)
+	body := response.Body
+	defer body.Close()
+	err = json.NewDecoder(body).Decode(&application)
 	return
-}
-
-func consResponse(w http.ResponseWriter) (*Response, error) {
-	application, err := getApplicationMe()
-	if err != nil {
-		log.Println("error while getting application:", err)
-		http.Error(w, "error while getting application", http.StatusInternalServerError)
-		return nil, err
-	}
-	response := Response{
-		URL: fmt.Sprintf(inviteURLPattern, application.ID, application.InstallParams.Permissions),
-	}
-	if err != nil {
-		log.Println("error while constructing the response: ", err)
-		http.Error(w, "error while constructing the response", http.StatusInternalServerError)
-		return nil, err
-	}
-	return &response, err
 }
